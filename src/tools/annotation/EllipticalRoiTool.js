@@ -5,6 +5,7 @@ import BaseAnnotationTool from '../base/BaseAnnotationTool.js';
 import { getToolState } from './../../stateManagement/toolState.js';
 import toolStyle from './../../stateManagement/toolStyle.js';
 import toolColors from './../../stateManagement/toolColors.js';
+import getHandleNearImagePoint from '../../manipulators/getHandleNearImagePoint';
 
 // Drawing
 import {
@@ -28,6 +29,7 @@ import throttle from './../../util/throttle.js';
 import { ellipticalRoiCursor } from '../cursors/index.js';
 import { getLogger } from '../../util/logger.js';
 import getPixelSpacing from '../../util/getPixelSpacing';
+import { getModule } from '../../store/index';
 
 const logger = getLogger('tools:annotation:EllipticalRoiTool');
 
@@ -47,6 +49,9 @@ export default class EllipticalRoiTool extends BaseAnnotationTool {
       configuration: {
         // showMinMax: false,
         // showHounsfieldUnits: true,
+        drawHandlesOnHover: false,
+        hideHandlesIfMoving: false,
+        renderDashed: false,
       },
       svgCursor: ellipticalRoiCursor,
     };
@@ -62,9 +67,7 @@ export default class EllipticalRoiTool extends BaseAnnotationTool {
 
     if (!goodEventData) {
       logger.error(
-        `required eventData not supplied to tool ${
-          this.name
-        }'s createNewMeasurement`
+        `required eventData not supplied to tool ${this.name}'s createNewMeasurement`
       );
 
       return;
@@ -104,6 +107,7 @@ export default class EllipticalRoiTool extends BaseAnnotationTool {
   pointNearTool(element, data, coords, interactionType) {
     const hasStartAndEndHandles =
       data && data.handles && data.handles.start && data.handles.end;
+
     const validParameters = hasStartAndEndHandles;
 
     if (!validParameters) {
@@ -114,6 +118,17 @@ export default class EllipticalRoiTool extends BaseAnnotationTool {
 
     if (!validParameters || data.visible === false) {
       return false;
+    }
+
+    const handleNearImagePoint = getHandleNearImagePoint(
+      element,
+      data.handles,
+      coords,
+      6
+    );
+
+    if (handleNearImagePoint) {
+      return true;
     }
 
     const distance = interactionType === 'mouse' ? 15 : 25;
@@ -179,7 +194,13 @@ export default class EllipticalRoiTool extends BaseAnnotationTool {
     const eventData = evt.detail;
     const { image, element } = eventData;
     const lineWidth = toolStyle.getToolWidth();
-    const { handleRadius, drawHandlesOnHover } = this.configuration;
+    const lineDash = getModule('globalConfiguration').configuration.lineDash;
+    const {
+      handleRadius,
+      drawHandlesOnHover,
+      hideHandlesIfMoving,
+      renderDashed,
+    } = this.configuration;
     const context = getNewContext(eventData.canvasContext.canvas);
     const { rowPixelSpacing, colPixelSpacing } = getPixelSpacing(image);
 
@@ -207,9 +228,16 @@ export default class EllipticalRoiTool extends BaseAnnotationTool {
           color,
           handleRadius,
           drawHandlesIfActive: drawHandlesOnHover,
+          hideHandlesIfMoving,
         };
 
         setShadow(context, this.configuration);
+
+        const ellipseOptions = { color };
+
+        if (renderDashed) {
+          ellipseOptions.lineDash = lineDash;
+        }
 
         // Draw
         drawEllipse(
@@ -217,9 +245,7 @@ export default class EllipticalRoiTool extends BaseAnnotationTool {
           element,
           data.handles.start,
           data.handles.end,
-          {
-            color,
-          },
+          ellipseOptions,
           'pixel',
           data.handles.initialRotation
         );
@@ -254,6 +280,8 @@ export default class EllipticalRoiTool extends BaseAnnotationTool {
           hasPixelSpacing,
           this.configuration
         );
+
+        data.unit = _getUnit(modality, this.configuration.showHounsfieldUnits);
 
         drawLinkedTextBox(
           context,
@@ -309,6 +337,10 @@ function _findTextBoxAnchorPoints(startHandle, endHandle) {
   ];
 }
 
+function _getUnit(modality, showHounsfieldUnits) {
+  return modality === 'CT' && showHounsfieldUnits !== false ? 'HU' : '';
+}
+
 /**
  *
  *
@@ -329,7 +361,6 @@ function _createTextBoxContent(
   options = {}
 ) {
   const showMinMax = options.showMinMax || false;
-  const showHounsfieldUnits = options.showHounsfieldUnits !== false;
   const textLines = [];
 
   // Don't display mean/standardDev for color images
@@ -337,12 +368,12 @@ function _createTextBoxContent(
 
   if (!isColorImage) {
     const hasStandardUptakeValues = meanStdDevSUV && meanStdDevSUV.mean !== 0;
-    const suffix = modality === 'CT' && showHounsfieldUnits ? ' HU' : '';
+    const unit = _getUnit(modality, options.showHounsfieldUnits);
 
-    let meanString = `Mean: ${numbersWithCommas(mean.toFixed(2))}${suffix}`;
+    let meanString = `Mean: ${numbersWithCommas(mean.toFixed(2))} ${unit}`;
     const stdDevString = `Std Dev: ${numbersWithCommas(
       stdDev.toFixed(2)
-    )}${suffix}`;
+    )} ${unit}`;
 
     // If this image has SUV values to display, concatenate them to the text line
     if (hasStandardUptakeValues) {
@@ -370,8 +401,8 @@ function _createTextBoxContent(
     }
 
     if (showMinMax) {
-      let minString = `Min: ${min}${suffix}`;
-      const maxString = `Max: ${max}${suffix}`;
+      let minString = `Min: ${min} ${unit}`;
+      const maxString = `Max: ${max} ${unit}`;
       const targetStringLength = hasStandardUptakeValues
         ? Math.floor(context.measureText(`${stdDevString}     `).width)
         : Math.floor(context.measureText(`${meanString}     `).width);

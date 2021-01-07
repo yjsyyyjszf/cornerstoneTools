@@ -8,11 +8,13 @@ import {
 } from './../../../stateManagement/toolState.js';
 import triggerEvent from '../../../util/triggerEvent.js';
 import getActiveTool from '../../../util/getActiveTool';
-import BaseAnnotationTool from '../../base/BaseAnnotationTool';
+import BidirectionalTool from '../BidirectionalTool';
+import updatePerpendicularLineHandles from './utils/updatePerpendicularLineHandles.js';
 
 export default function(evt, interactionType) {
   const eventData = evt.detail;
   const { element, image, buttons } = eventData;
+
   const config = this.configuration;
 
   if (checkPixelSpacing(image)) {
@@ -38,52 +40,58 @@ export default function(evt, interactionType) {
     this.name,
     measurementData,
     end,
-    {
-      doneMovingCallback: () => {
-        const { handles, longestDiameter, shortestDiameter } = measurementData;
-        const hasHandlesOutside = anyHandlesOutsideImage(eventData, handles);
-        const longestDiameterSize = parseFloat(longestDiameter) || 0;
-        const shortestDiameterSize = parseFloat(shortestDiameter) || 0;
-        const isTooSmal = longestDiameterSize < 1 || shortestDiameterSize < 1;
-        const isTooFast = new Date().getTime() - timestamp < 150;
+    {},
+    interactionType,
+    success => {
+      if (!success) {
+        removeToolState(element, this.name, measurementData);
 
-        if (hasHandlesOutside || isTooSmal || isTooFast) {
-          // Delete the measurement
-          measurementData.cancelled = true;
-          removeToolState(element, this.name, measurementData);
-        } else {
-          // Set lesionMeasurementData Session
-          config.getMeasurementLocationCallback(
-            measurementData,
-            eventData,
-            doneCallback
-          );
-        }
+        return;
+      }
+      const { handles, longestDiameter, shortestDiameter } = measurementData;
+      const hasHandlesOutside = anyHandlesOutsideImage(eventData, handles);
+      const longestDiameterSize = parseFloat(longestDiameter) || 0;
+      const shortestDiameterSize = parseFloat(shortestDiameter) || 0;
+      const isTooSmal = longestDiameterSize < 1 || shortestDiameterSize < 1;
+      const isTooFast = new Date().getTime() - timestamp < 150;
 
-        // Perpendicular line is not connected to long-line
-        perpendicularStart.locked = false;
-
-        measurementData.invalidated = true;
-
-        external.cornerstone.updateImage(element);
-
-        const activeTool = getActiveTool(element, buttons, interactionType);
-
-        if (activeTool instanceof BaseAnnotationTool) {
-          activeTool.updateCachedStats(image, element, measurementData);
-        }
-
-        const modifiedEventData = {
-          toolType: this.name,
-          element,
+      if (hasHandlesOutside || isTooSmal || isTooFast) {
+        // Delete the measurement
+        measurementData.cancelled = true;
+        removeToolState(element, this.name, measurementData);
+      } else {
+        // Set lesionMeasurementData Session
+        config.getMeasurementLocationCallback(
           measurementData,
-        };
+          eventData,
+          doneCallback
+        );
+      }
 
-        triggerEvent(element, EVENTS.MEASUREMENT_MODIFIED, modifiedEventData);
-        triggerEvent(element, EVENTS.MEASUREMENT_COMPLETED, modifiedEventData);
-      },
-    },
-    interactionType
+      // Update perpendicular line and disconnect it from the long-line
+      updatePerpendicularLineHandles(eventData, measurementData);
+      perpendicularStart.locked = false;
+
+      measurementData.invalidated = true;
+
+      external.cornerstone.updateImage(element);
+
+      const activeTool = getActiveTool(element, buttons, interactionType);
+
+      if (activeTool instanceof BidirectionalTool) {
+        activeTool.updateCachedStats(image, element, measurementData);
+      }
+
+      const modifiedEventData = {
+        toolName: this.name,
+        toolType: this.name, // Deprecation notice: toolType will be replaced by toolName
+        element,
+        measurementData,
+      };
+
+      triggerEvent(element, EVENTS.MEASUREMENT_MODIFIED, modifiedEventData);
+      triggerEvent(element, EVENTS.MEASUREMENT_COMPLETED, modifiedEventData);
+    }
   );
 }
 

@@ -9,9 +9,10 @@ import {
   newImageEventDispatcher,
   touchToolEventDispatcher,
 } from '../../eventDispatchers/index.js';
-import store from '../index.js';
+import store, { getModule } from '../index.js';
 import { getLogger } from '../../util/logger.js';
 import loadHandlerManager from '../../stateManagement/loadHandlerManager.js';
+import { setToolDisabledForElement } from '../setToolMode';
 
 const logger = getLogger('internals:removeEnabledElement');
 
@@ -38,20 +39,21 @@ const logger = getLogger('internals:removeEnabledElement');
 export default function(elementDisabledEvt) {
   logger.log('EVENT:ELEMENT_DISABLED');
   const enabledElement = elementDisabledEvt.detail.element;
+  const { configuration } = getModule('globalConfiguration');
 
   // Dispatchers
   imageRenderedEventDispatcher.disable(enabledElement);
   newImageEventDispatcher.disable(enabledElement);
 
   // Mouse
-  if (store.modules.globalConfiguration.state.mouseEnabled) {
+  if (configuration.mouseEnabled) {
     mouseEventListeners.disable(enabledElement);
     wheelEventListener.disable(enabledElement);
     mouseToolEventDispatcher.disable(enabledElement);
   }
 
   // Touch
-  if (store.modules.globalConfiguration.state.touchEnabled) {
+  if (configuration.touchEnabled) {
     touchEventListeners.disable(enabledElement);
     touchToolEventDispatcher.disable(enabledElement);
   }
@@ -70,8 +72,11 @@ export default function(elementDisabledEvt) {
  * @returns  {void}
  */
 const _removeAllToolsForElement = function(enabledElement) {
-  // Note: We may want to `setToolDisabled` before removing from store
-  // Or take other action to remove any lingering eventListeners/state
+  store.state.tools.forEach(tool => {
+    if (tool.element === enabledElement) {
+      setToolDisabledForElement(tool.element, tool.name);
+    }
+  });
   store.state.tools = store.state.tools.filter(
     tool => tool.element !== enabledElement
   );

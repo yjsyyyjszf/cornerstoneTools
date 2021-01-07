@@ -24,6 +24,7 @@ import throttle from './../../util/throttle.js';
 import { rectangleRoiCursor } from '../cursors/index.js';
 import { getLogger } from '../../util/logger.js';
 import getPixelSpacing from '../../util/getPixelSpacing';
+import { getModule } from '../../store/index';
 
 const logger = getLogger('tools:annotation:RectangleRoiTool');
 
@@ -41,6 +42,10 @@ export default class RectangleRoiTool extends BaseAnnotationTool {
       name: 'RectangleRoi',
       supportedInteractionTypes: ['Mouse', 'Touch'],
       configuration: {
+        drawHandles: true,
+        drawHandlesOnHover: false,
+        hideHandlesIfMoving: false,
+        renderDashed: false,
         // showMinMax: false,
         // showHounsfieldUnits: true
       },
@@ -58,9 +63,7 @@ export default class RectangleRoiTool extends BaseAnnotationTool {
 
     if (!goodEventData) {
       logger.error(
-        `required eventData not supplied to tool ${
-          this.name
-        }'s createNewMeasurement`
+        `required eventData not supplied to tool ${this.name}'s createNewMeasurement`
       );
 
       return;
@@ -166,7 +169,13 @@ export default class RectangleRoiTool extends BaseAnnotationTool {
     const eventData = evt.detail;
     const { image, element } = eventData;
     const lineWidth = toolStyle.getToolWidth();
-    const { handleRadius, drawHandlesOnHover } = this.configuration;
+    const lineDash = getModule('globalConfiguration').configuration.lineDash;
+    const {
+      handleRadius,
+      drawHandlesOnHover,
+      hideHandlesIfMoving,
+      renderDashed,
+    } = this.configuration;
     const context = getNewContext(eventData.canvasContext.canvas);
     const { rowPixelSpacing, colPixelSpacing } = getPixelSpacing(image);
 
@@ -194,9 +203,16 @@ export default class RectangleRoiTool extends BaseAnnotationTool {
           color,
           handleRadius,
           drawHandlesIfActive: drawHandlesOnHover,
+          hideHandlesIfMoving,
         };
 
         setShadow(context, this.configuration);
+
+        const rectOptions = { color };
+
+        if (renderDashed) {
+          rectOptions.lineDash = lineDash;
+        }
 
         // Draw
         drawRect(
@@ -204,13 +220,14 @@ export default class RectangleRoiTool extends BaseAnnotationTool {
           element,
           data.handles.start,
           data.handles.end,
-          {
-            color,
-          },
+          rectOptions,
           'pixel',
           data.handles.initialRotation
         );
-        drawHandles(context, eventData, data.handles, handleOptions);
+
+        if (this.configuration.drawHandles) {
+          drawHandles(context, eventData, data.handles, handleOptions);
+        }
 
         // Update textbox stats
         if (data.invalidated === true) {
@@ -241,6 +258,8 @@ export default class RectangleRoiTool extends BaseAnnotationTool {
           hasPixelSpacing,
           this.configuration
         );
+
+        data.unit = _getUnit(modality, this.configuration.showHounsfieldUnits);
 
         drawLinkedTextBox(
           context,
@@ -435,6 +454,10 @@ function _formatArea(area, hasPixelSpacing) {
   return `Area: ${numbersWithCommas(area.toFixed(2))}${suffix}`;
 }
 
+function _getUnit(modality, showHounsfieldUnits) {
+  return modality === 'CT' && showHounsfieldUnits !== false ? 'HU' : '';
+}
+
 /**
  * TODO: This is identical to EllipticalROI's same fn
  * TODO: We may want to make this a utility for ROIs with these values?
@@ -456,19 +479,18 @@ function _createTextBoxContent(
   options = {}
 ) {
   const showMinMax = options.showMinMax || false;
-  const showHounsfieldUnits = options.showHounsfieldUnits !== false;
   const textLines = [];
 
   const otherLines = [];
 
   if (!isColorImage) {
     const hasStandardUptakeValues = meanStdDevSUV && meanStdDevSUV.mean !== 0;
-    const suffix = modality === 'CT' && showHounsfieldUnits ? ' HU' : '';
+    const unit = _getUnit(modality, options.showHounsfieldUnits);
 
-    let meanString = `Mean: ${numbersWithCommas(mean.toFixed(2))}${suffix}`;
+    let meanString = `Mean: ${numbersWithCommas(mean.toFixed(2))} ${unit}`;
     const stdDevString = `Std Dev: ${numbersWithCommas(
       stdDev.toFixed(2)
-    )}${suffix}`;
+    )} ${unit}`;
 
     // If this image has SUV values to display, concatenate them to the text line
     if (hasStandardUptakeValues) {
@@ -492,12 +514,13 @@ function _createTextBoxContent(
       otherLines.push(`${meanString}${meanSuvString}`);
       otherLines.push(`${stdDevString}     ${stdDevSuvString}`);
     } else {
-      otherLines.push(`${meanString}     ${stdDevString}`);
+      otherLines.push(`${meanString}`);
+      otherLines.push(`${stdDevString}`);
     }
 
     if (showMinMax) {
-      let minString = `Min: ${min}${suffix}`;
-      const maxString = `Max: ${max}${suffix}`;
+      let minString = `Min: ${min} ${unit}`;
+      const maxString = `Max: ${max} ${unit}`;
       const targetStringLength = hasStandardUptakeValues
         ? Math.floor(context.measureText(`${stdDevString}     `).width)
         : Math.floor(context.measureText(`${meanString}     `).width);

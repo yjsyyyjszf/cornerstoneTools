@@ -5,6 +5,7 @@ import textStyle from './../../stateManagement/textStyle.js';
 import {
   addToolState,
   getToolState,
+  removeToolState,
 } from './../../stateManagement/toolState.js';
 import toolStyle from './../../stateManagement/toolStyle.js';
 import toolColors from './../../stateManagement/toolColors.js';
@@ -26,6 +27,7 @@ import { cobbAngleCursor } from '../cursors/index.js';
 import triggerEvent from '../../util/triggerEvent.js';
 import throttle from '../../util/throttle';
 import getPixelSpacing from '../../util/getPixelSpacing';
+import { getModule } from '../../store/index';
 
 /**
  * @public
@@ -40,6 +42,12 @@ export default class CobbAngleTool extends BaseAnnotationTool {
       name: 'CobbAngle',
       supportedInteractionTypes: ['Mouse', 'Touch'],
       svgCursor: cobbAngleCursor,
+      configuration: {
+        drawHandles: true,
+        drawHandlesOnHover: false,
+        hideHandlesIfMoving: false,
+        renderDashed: false,
+      },
     };
 
     super(props, defaultProps);
@@ -129,16 +137,16 @@ export default class CobbAngleTool extends BaseAnnotationTool {
 
     const dx1 =
       (Math.ceil(data.handles.start.x) - Math.ceil(data.handles.end.x)) *
-      colPixelSpacing;
+      (colPixelSpacing || 1);
     const dy1 =
       (Math.ceil(data.handles.start.y) - Math.ceil(data.handles.end.y)) *
-      rowPixelSpacing;
+      (rowPixelSpacing || 1);
     const dx2 =
       (Math.ceil(data.handles.start2.x) - Math.ceil(data.handles.end2.x)) *
-      colPixelSpacing;
+      (colPixelSpacing || 1);
     const dy2 =
       (Math.ceil(data.handles.start2.y) - Math.ceil(data.handles.end2.y)) *
-      rowPixelSpacing;
+      (rowPixelSpacing || 1);
 
     let angle = Math.acos(
       Math.abs(
@@ -155,7 +163,12 @@ export default class CobbAngleTool extends BaseAnnotationTool {
 
   renderToolData(evt) {
     const eventData = evt.detail;
-    const { handleRadius, drawHandlesOnHover } = this.configuration;
+    const {
+      handleRadius,
+      drawHandlesOnHover,
+      hideHandlesIfMoving,
+      renderDashed,
+    } = this.configuration;
     // If we have no toolData for this element, return immediately as there is nothing to do
     const toolData = getToolState(evt.currentTarget, this.name);
 
@@ -167,6 +180,7 @@ export default class CobbAngleTool extends BaseAnnotationTool {
     const context = getNewContext(eventData.canvasContext.canvas);
 
     const lineWidth = toolStyle.getToolWidth();
+    const lineDash = getModule('globalConfiguration').configuration.lineDash;
     const font = textStyle.getFont();
 
     for (let i = 0; i < toolData.data.length; i++) {
@@ -182,14 +196,18 @@ export default class CobbAngleTool extends BaseAnnotationTool {
         // Differentiate the color of activation tool
         const color = toolColors.getColorIfActive(data);
 
+        const lineOptions = { color };
+
+        if (renderDashed) {
+          lineOptions.lineDash = lineDash;
+        }
+
         drawLine(
           context,
           eventData.element,
           data.handles.start,
           data.handles.end,
-          {
-            color,
-          }
+          lineOptions
         );
 
         if (data.complete) {
@@ -198,9 +216,7 @@ export default class CobbAngleTool extends BaseAnnotationTool {
             eventData.element,
             data.handles.start2,
             data.handles.end2,
-            {
-              color,
-            }
+            lineOptions
           );
         }
 
@@ -209,9 +225,12 @@ export default class CobbAngleTool extends BaseAnnotationTool {
           color,
           handleRadius,
           drawHandlesIfActive: drawHandlesOnHover,
+          hideHandlesIfMoving,
         };
 
-        drawHandles(context, eventData, data.handles, handleOptions);
+        if (this.configuration.drawHandles) {
+          drawHandles(context, eventData, data.handles, handleOptions);
+        }
 
         // Draw the text
         context.fillStyle = color;
@@ -265,7 +284,14 @@ export default class CobbAngleTool extends BaseAnnotationTool {
 
     let measurementData;
     let toMoveHandle;
-    let options;
+    let doneMovingCallback = success => {
+      // DoneMovingCallback for first measurement.
+      if (!success) {
+        removeToolState(element, this.name, measurementData);
+
+        return;
+      }
+    };
 
     // Search for incomplete measurements
     const element = evt.detail.element;
@@ -290,26 +316,28 @@ export default class CobbAngleTool extends BaseAnnotationTool {
       };
       toMoveHandle = measurementData.handles.end2;
       this.hasIncomplete = false;
-      options = Object.assign(
-        {
-          doneMovingCallback: () => {
-            const eventType = EVENTS.MEASUREMENT_COMPLETED;
-            const eventData = {
-              toolType: this.name,
-              element,
-              measurementData,
-            };
+      doneMovingCallback = success => {
+        // DoneMovingCallback for second measurement
+        if (!success) {
+          removeToolState(element, this.name, measurementData);
 
-            triggerEvent(element, eventType, eventData);
-          },
-        },
-        this.options
-      );
+          return;
+        }
+
+        const eventType = EVENTS.MEASUREMENT_COMPLETED;
+        const eventData = {
+          toolName: this.name,
+          toolType: this.name, // Deprecation notice: toolType will be replaced by toolName
+          element,
+          measurementData,
+        };
+
+        triggerEvent(element, eventType, eventData);
+      };
     } else {
       measurementData = this.createNewMeasurement(eventData);
       addToolState(element, this.name, measurementData);
       toMoveHandle = measurementData.handles.end;
-      options = this.options;
     }
 
     // Associate this data with this imageId so we can render it and manipulate it
@@ -320,8 +348,9 @@ export default class CobbAngleTool extends BaseAnnotationTool {
       this.name,
       measurementData,
       toMoveHandle,
-      options,
-      interactionType
+      this.options,
+      interactionType,
+      doneMovingCallback
     );
   }
 

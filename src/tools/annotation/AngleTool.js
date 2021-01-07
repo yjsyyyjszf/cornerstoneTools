@@ -4,6 +4,7 @@ import BaseAnnotationTool from '../base/BaseAnnotationTool.js';
 import {
   addToolState,
   getToolState,
+  removeToolState,
 } from './../../stateManagement/toolState.js';
 import toolStyle from './../../stateManagement/toolStyle.js';
 import toolColors from './../../stateManagement/toolColors.js';
@@ -26,6 +27,7 @@ import triggerEvent from '../../util/triggerEvent.js';
 import EVENTS from '../../events.js';
 import getPixelSpacing from '../../util/getPixelSpacing';
 import throttle from '../../util/throttle';
+import { getModule } from '../../store/index';
 
 /**
  * @public
@@ -43,6 +45,12 @@ export default class AngleTool extends BaseAnnotationTool {
       name: 'Angle',
       supportedInteractionTypes: ['Mouse', 'Touch'],
       svgCursor: angleCursor,
+      configuration: {
+        drawHandles: true,
+        drawHandlesOnHover: false,
+        hideHandlesIfMoving: false,
+        renderDashed: false,
+      },
     };
 
     super(props, defaultProps);
@@ -108,22 +116,9 @@ export default class AngleTool extends BaseAnnotationTool {
   }
 
   updateCachedStats(image, element, data) {
-    const { rowPixelSpacing, colPixelSpacing } = getPixelSpacing(image);
-
-    const sideA = {
-      x: (data.handles.middle.x - data.handles.start.x) * colPixelSpacing,
-      y: (data.handles.middle.y - data.handles.start.y) * rowPixelSpacing,
-    };
-
-    const sideB = {
-      x: (data.handles.end.x - data.handles.middle.x) * colPixelSpacing,
-      y: (data.handles.end.y - data.handles.middle.y) * rowPixelSpacing,
-    };
-
-    const sideC = {
-      x: (data.handles.end.x - data.handles.start.x) * colPixelSpacing,
-      y: (data.handles.end.y - data.handles.start.y) * rowPixelSpacing,
-    };
+    const sideA = getSide(image, data.handles.middle, data.handles.start);
+    const sideB = getSide(image, data.handles.end, data.handles.middle);
+    const sideC = getSide(image, data.handles.end, data.handles.start);
 
     const sideALength = length(sideA);
     const sideBLength = length(sideB);
@@ -146,9 +141,15 @@ export default class AngleTool extends BaseAnnotationTool {
   renderToolData(evt) {
     const eventData = evt.detail;
     const enabledElement = eventData.enabledElement;
-    const { handleRadius, drawHandlesOnHover } = this.configuration;
+    const {
+      handleRadius,
+      drawHandlesOnHover,
+      hideHandlesIfMoving,
+      renderDashed,
+    } = this.configuration;
     // If we have no toolData for this element, return immediately as there is nothing to do
     const toolData = getToolState(evt.currentTarget, this.name);
+    const lineDash = getModule('globalConfiguration').configuration.lineDash;
 
     if (!toolData) {
       return;
@@ -183,12 +184,18 @@ export default class AngleTool extends BaseAnnotationTool {
           data.handles.middle
         );
 
+        const lineOptions = { color };
+
+        if (renderDashed) {
+          lineOptions.lineDash = lineDash;
+        }
+
         drawJoinedLines(
           context,
           eventData.element,
           data.handles.start,
           [data.handles.middle, data.handles.end],
-          { color }
+          lineOptions
         );
 
         // Draw the handles
@@ -196,9 +203,12 @@ export default class AngleTool extends BaseAnnotationTool {
           color,
           handleRadius,
           drawHandlesIfActive: drawHandlesOnHover,
+          hideHandlesIfMoving,
         };
 
-        drawHandles(context, eventData, data.handles, handleOptions);
+        if (this.configuration.drawHandles) {
+          drawHandles(context, eventData, data.handles, handleOptions);
+        }
 
         // Update textbox stats
         if (data.invalidated === true) {
@@ -290,60 +300,76 @@ export default class AngleTool extends BaseAnnotationTool {
     addToolState(element, this.name, measurementData);
     external.cornerstone.updateImage(element);
 
-    const doneMovingEndHandleOptions = Object.assign(
-      {},
-      {
-        doneMovingCallback: () => {
-          measurementData.active = false;
-          this.preventNewMeasurement = false;
-          const eventType = EVENTS.MEASUREMENT_COMPLETED;
-          const eventData = {
-            toolType: this.name,
-            element,
-            measurementData,
-          };
-
-          triggerEvent(element, eventType, eventData);
-          external.cornerstone.updateImage(element);
-        },
-      },
-      this.options
-    );
-
-    const doneMovingMiddleHandleOptions = Object.assign(
-      {},
-      {
-        doneMovingCallback: () => {
-          measurementData.active = false;
-          measurementData.handles.end.active = true;
-
-          external.cornerstone.updateImage(element);
-
-          moveNewHandle(
-            eventData,
-            this.name,
-            measurementData,
-            measurementData.handles.end,
-            doneMovingEndHandleOptions,
-            interactionType
-          );
-        },
-      },
-      this.options
-    );
-
-    // Step 1, create start and second middle
+    // Step 1, create start and second middle.
     moveNewHandle(
       eventData,
       this.name,
       measurementData,
       measurementData.handles.middle,
-      doneMovingMiddleHandleOptions,
-      interactionType
+      this.options,
+      interactionType,
+      success => {
+        measurementData.active = false;
+
+        if (!success) {
+          removeToolState(element, this.name, measurementData);
+
+          this.preventNewMeasurement = false;
+
+          return;
+        }
+
+        measurementData.handles.end.active = true;
+
+        external.cornerstone.updateImage(element);
+
+        // Step 2, create end.
+        moveNewHandle(
+          eventData,
+          this.name,
+          measurementData,
+          measurementData.handles.end,
+          this.options,
+          interactionType,
+          success => {
+            if (success) {
+              measurementData.active = false;
+              external.cornerstone.updateImage(element);
+            } else {
+              removeToolState(element, this.name, measurementData);
+            }
+
+            this.preventNewMeasurement = false;
+            external.cornerstone.updateImage(element);
+
+            const modifiedEventData = {
+              toolName: this.name,
+              toolType: this.name, // Deprecation notice: toolType will be replaced by toolName
+              element,
+              measurementData,
+            };
+
+            triggerEvent(
+              element,
+              EVENTS.MEASUREMENT_COMPLETED,
+              modifiedEventData
+            );
+          }
+        );
+      }
     );
   }
 }
 
 function length(vector) {
   return Math.sqrt(Math.pow(vector.x, 2) + Math.pow(vector.y, 2));
+}
+
+function getSide(image, handleEnd, handleStart) {
+  const { rowPixelSpacing, colPixelSpacing } = getPixelSpacing(image);
+
+  return {
+    x: (handleEnd.x - handleStart.x) * (colPixelSpacing || 1),
+    y: (handleEnd.y - handleStart.y) * (rowPixelSpacing || 1),
+  };
 }

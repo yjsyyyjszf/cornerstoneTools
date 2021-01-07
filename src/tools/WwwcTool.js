@@ -48,7 +48,8 @@ export default class WwwcTool extends BaseTool {
  * @param {Object} { orienttion }
  * @returns {void}
  */
-function basicLevelingStrategy(evt, { orientation }) {
+function basicLevelingStrategy(evt) {
+  const { orientation } = this.configuration;
   const eventData = evt.detail;
 
   const maxVOI =
@@ -70,4 +71,7 @@ function basicLevelingStrategy(evt, { orientation }) {
     eventData.viewport.voi.windowWidth += deltaY;
     eventData.viewport.voi.windowCenter += deltaX;
   }
+
+  // Unset any existing VOI LUT
+  eventData.viewport.voiLUT = undefined;
 }

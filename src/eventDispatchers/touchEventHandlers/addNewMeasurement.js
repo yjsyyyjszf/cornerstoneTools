@@ -58,28 +58,23 @@ export default function(evt, tool) {
 
   external.cornerstone.updateImage(element);
 
-  const options = Object.assign(
-    {
-      doneMovingCallback: () => {
-        const eventType = EVENTS.MEASUREMENT_COMPLETED;
-        const eventData = {
-          toolName: tool.name,
-          element,
-          measurementData,
-        };
-
-        triggerEvent(element, eventType, eventData);
-      },
-    },
-    tool.options
-  );
-
   moveNewHandle(
     touchEventData,
     tool.name,
     measurementData,
     measurementData.handles.end,
-    options,
-    'touch'
+    tool.options,
+    'touch',
+    () => {
+      const eventType = EVENTS.MEASUREMENT_COMPLETED;
+      const eventData = {
+        toolName: tool.name,
+        toolType: tool.name, // Deprecation notice: toolType will be replaced by toolName
+        element,
+        measurementData,
+      };
+
+      triggerEvent(element, eventType, eventData);
+    }
   );
 }

@@ -14,6 +14,7 @@ import calculateSUV from '../../util/calculateSUV.js';
 import { probeCursor } from '../cursors/index.js';
 import { getLogger } from '../../util/logger.js';
 import throttle from '../../util/throttle';
+import { getModule } from '../../store/index';
 
 const logger = getLogger('tools:annotation:ProbeTool');
 
@@ -31,6 +32,10 @@ export default class ProbeTool extends BaseAnnotationTool {
       name: 'Probe',
       supportedInteractionTypes: ['Mouse', 'Touch'],
       svgCursor: probeCursor,
+      configuration: {
+        drawHandles: true,
+        renderDashed: false,
+      },
     };
 
     super(props, defaultProps);
@@ -44,9 +49,7 @@ export default class ProbeTool extends BaseAnnotationTool {
 
     if (!goodEventData) {
       logger.error(
-        `required eventData not supplied to tool ${
-          this.name
-        }'s createNewMeasurement`
+        `required eventData not supplied to tool ${this.name}'s createNewMeasurement`
       );
 
       return;
@@ -130,7 +133,7 @@ export default class ProbeTool extends BaseAnnotationTool {
 
   renderToolData(evt) {
     const eventData = evt.detail;
-    const { handleRadius } = this.configuration;
+    const { handleRadius, renderDashed } = this.configuration;
     const toolData = getToolState(evt.currentTarget, this.name);
 
     if (!toolData) {
@@ -141,6 +144,7 @@ export default class ProbeTool extends BaseAnnotationTool {
     const context = getNewContext(eventData.canvasContext.canvas);
     const { image, element } = eventData;
     const fontHeight = textStyle.getFontSize();
+    const lineDash = getModule('globalConfiguration').configuration.lineDash;
 
     for (let i = 0; i < toolData.data.length; i++) {
       const data = toolData.data[i];
@@ -152,11 +156,16 @@ export default class ProbeTool extends BaseAnnotationTool {
       draw(context, context => {
         const color = toolColors.getColorIfActive(data);
 
-        // Draw the handles
-        drawHandles(context, eventData, data.handles, {
-          handleRadius,
-          color,
-        });
+        if (this.configuration.drawHandles) {
+          // Draw the handles
+          let handleOptions = { handleRadius, color };
+
+          if (renderDashed) {
+            handleOptions.lineDash = lineDash;
+          }
+
+          drawHandles(context, eventData, data.handles, handleOptions);
+        }
 
         // Update textbox stats
         if (data.invalidated === true) {

@@ -22,6 +22,7 @@ import drawArrow from './../../drawing/drawArrow.js';
 import drawHandles from './../../drawing/drawHandles.js';
 import { textBoxWidth } from './../../drawing/drawTextBox.js';
 import { arrowAnnotateCursor } from '../cursors/index.js';
+import { getModule } from '../../store/index';
 
 /**
  * @public
@@ -38,9 +39,12 @@ export default class ArrowAnnotateTool extends BaseAnnotationTool {
       configuration: {
         getTextCallback,
         changeTextCallback,
-        drawHandles: false,
-        drawHandlesOnHover: true,
+        drawHandles: true,
+        drawHandlesOnHover: false,
+        hideHandlesIfMoving: false,
         arrowFirst: true,
+        renderDashed: false,
+        allowEmptyLabel: false,
       },
       svgCursor: arrowAnnotateCursor,
     };
@@ -91,13 +95,18 @@ export default class ArrowAnnotateTool extends BaseAnnotationTool {
     );
   }
 
-  updateCachedStats(image, element, data) {
-    // No stats calculation for this tool
+  updateCachedStats() {
+    // Implementing to satisfy BaseAnnotationTool
   }
 
   renderToolData(evt) {
     const { element, enabledElement } = evt.detail;
-    const { handleRadius, drawHandlesOnHover } = this.configuration;
+    const {
+      handleRadius,
+      drawHandlesOnHover,
+      hideHandlesIfMoving,
+      renderDashed,
+    } = this.configuration;
 
     // If we have no toolData for this element, return immediately as there is nothing to do
     const toolData = getToolState(element, this.name);
@@ -111,6 +120,11 @@ export default class ArrowAnnotateTool extends BaseAnnotationTool {
     const context = getNewContext(canvas);
 
     const lineWidth = toolStyle.getToolWidth();
+
+    let lineDash;
+    if (renderDashed) {
+      lineDash = getModule('globalConfiguration').configuration.lineDash;
+    }
 
     for (let i = 0; i < toolData.data.length; i++) {
       const data = toolData.data[i];
@@ -141,7 +155,8 @@ export default class ArrowAnnotateTool extends BaseAnnotationTool {
             handleEndCanvas,
             handleStartCanvas,
             color,
-            lineWidth
+            lineWidth,
+            lineDash
           );
         } else {
           drawArrow(
@@ -149,7 +164,8 @@ export default class ArrowAnnotateTool extends BaseAnnotationTool {
             handleStartCanvas,
             handleEndCanvas,
             color,
-            lineWidth
+            lineWidth,
+            lineDash
           );
         }
 
@@ -157,6 +173,7 @@ export default class ArrowAnnotateTool extends BaseAnnotationTool {
           color,
           handleRadius,
           drawHandlesIfActive: drawHandlesOnHover,
+          hideHandlesIfMoving,
         };
 
         if (this.configuration.drawHandles) {
@@ -241,60 +258,55 @@ export default class ArrowAnnotateTool extends BaseAnnotationTool {
     const element = evt.detail.element;
     const measurementData = this.createNewMeasurement(evt);
 
+    const { allowEmptyLabel } = this.configuration;
+
     // Associate this data with this imageId so we can render it and manipulate it
     addToolState(element, this.name, measurementData);
     external.cornerstone.updateImage(element);
-
-    const toolOptions = Object.assign(
-      {},
-      {
-        doneMovingCallback: () => {
-          if (measurementData.text === undefined) {
-            this.configuration.getTextCallback(text => {
-              measurementData.active = false;
-
-              if (text) {
-                measurementData.text = text;
-                const eventType = EVENTS.MEASUREMENT_COMPLETED;
-                const eventData = {
-                  toolName: this.name,
-                  element,
-                  measurementData,
-                };
-
-                triggerEvent(element, eventType, eventData);
-              } else {
-                removeToolState(element, this.name, measurementData);
-              }
-
-              external.cornerstone.updateImage(element);
-            });
-          }
-
-          external.cornerstone.updateImage(element);
-        },
-      },
-      this.options
-    );
 
     moveNewHandle(
       evt.detail,
       this.name,
       measurementData,
       measurementData.handles.end,
-      toolOptions,
-      interactionType
+      this.options,
+      interactionType,
+      success => {
+        if (success) {
+          if (measurementData.text === undefined) {
+            this.configuration.getTextCallback(text => {
+              if (text || allowEmptyLabel) {
+                measurementData.text = text;
+                measurementData.active = false;
+
+                const modifiedEventData = {
+                  toolName: this.name,
+                  toolType: this.name, // Deprecation notice: toolType will be replaced by toolName
+                  element,
+                  measurementData,
+                };
+
+                external.cornerstone.updateImage(element);
+                triggerEvent(
+                  element,
+                  EVENTS.MEASUREMENT_COMPLETED,
+                  modifiedEventData
+                );
+              } else {
+                removeToolState(element, this.name, measurementData);
+              }
+            }, evt.detail);
+          }
+        } else {
+          removeToolState(element, this.name, measurementData);
+        }
+
+        external.cornerstone.updateImage(element);
+      }
     );
   }
 
   doubleClickCallback(evt) {
-    if (
-      !Array.isArray(this.options.mouseButtonMask) ||
-      !this.options.mouseButtonMask.includes(evt.detail.buttons)
-    ) {
-      return;
-    }
-
     return this._updateTextForNearbyAnnotation(evt);
   }
 
@@ -320,6 +332,7 @@ export default class ArrowAnnotateTool extends BaseAnnotationTool {
       ) {
         data.active = true;
         external.cornerstone.updateImage(element);
+
         // Allow relabelling via a callback
         this.configuration.changeTextCallback(
           data,
@@ -336,15 +349,22 @@ export default class ArrowAnnotateTool extends BaseAnnotationTool {
     }
   }
 
-  _doneChangingTextCallback(element, data, updatedText, deleteTool) {
+  _doneChangingTextCallback(element, measurementData, updatedText, deleteTool) {
     if (deleteTool === true) {
-      removeToolState(element, this.name, data);
+      removeToolState(element, this.name, measurementData);
     } else {
-      data.text = updatedText;
+      measurementData.text = updatedText;
     }
 
-    data.active = false;
+    measurementData.active = false;
     external.cornerstone.updateImage(element);
+
+    triggerEvent(element, EVENTS.MEASUREMENT_MODIFIED, {
+      toolName: this.name,
+      toolType: this.name, // Deprecation notice: toolType will be replaced by toolName
+      element,
+      measurementData,
+    });
   }
 }
 
